@@ -1,3 +1,4 @@
+import asyncio
 import abc
 from typing import Coroutine, Any
 
@@ -65,16 +66,57 @@ class StudentWatcher(AbstractWatcher):
     def __init__(self, registrator: AbstractRegistrator):
         super().__init__(registrator)
         # Your code goes here
-        ...
 
+        # set with planned tasks
+        self.planned_tasks = set()
+            
     async def start(self) -> None:
-        # Your code goes here
-        ...
+        self.watcher = asyncio.create_task(self.watching_coro())
 
     async def stop(self) -> None:
-        # Your code goes here
-        ...
+        num_registered_tasks = -1
+        # register executed tasks if exist
+        if len(self.planned_tasks): 
+            num_registered_tasks = await self.register_results()
+
+        # cancel all other tasks
+        if len(self.planned_tasks):
+            for task in self.planned_tasks:
+                task.cancel()
+            await asyncio.wait(self.planned_tasks, return_when=asyncio.ALL_COMPLETED)
+        
+        # cancel watcher-coro
+        self.watcher.cancel()
+        await asyncio.wait([self.watcher])
 
     def start_and_watch(self, coro: Coroutine) -> None:
-        # Your code goes here
-        ...
+        # create and plan new task
+        task = asyncio.create_task(coro)
+        self.planned_tasks.add(task)
+
+    async def watching_coro(self) -> None:
+        while True:
+            # sleep 0.1s if no planned tasks
+            if len(self.planned_tasks) == 0:
+                await asyncio.sleep(0.1)
+                continue
+
+            # register results of all executed tasks
+            await self.register_results()
+
+    async def register_results(self) -> None:
+        # waiting some of planned tasks with timeout
+        done, pending = await asyncio.wait(self.planned_tasks, timeout=0.1)
+
+        # register results and errors of executed tasks
+        for task in done:
+            exc = task.exception()
+            if exc:
+                self.registrator.register_error(exc)
+            else:
+                self.registrator.register_value(task.result())
+        
+        # update set of planned tasks
+        self.planned_tasks = pending
+
+        return len(done)
